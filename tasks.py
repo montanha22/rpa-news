@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, date
 
 from dateutil.relativedelta import relativedelta
 from robocorp import workitems
@@ -14,7 +14,7 @@ from utilities import count_search_query_occurrences, is_there_any_money_amount
 @dataclass
 class OutputRow:
     title: str
-    date: datetime
+    date: date
     description: str
     picture_filename: str
     search_phrase_count: int
@@ -23,6 +23,19 @@ class OutputRow:
     search_query: str
     category: str
     months: int
+
+    def to_dict(self):
+        return {
+            "Title": self.title,
+            "Date": self.date.isoformat(),
+            "Description": self.description,
+            "Picture filename": self.picture_filename,
+            "Search phrase count": self.search_phrase_count,
+            "Contains money": self.contains_money,
+            "Search query": self.search_query,
+            "Category": self.category,
+            "Months": self.months,
+        }
 
 
 @task
@@ -45,7 +58,7 @@ def scrape_LA_times():
         news = scraper.get_news(min_date)
         scraper.driver_quit()
 
-        output_rows = []
+        output_rows: list[OutputRow] = []
 
         for new in news:
             query_count = count_search_query_occurrences(new, search_query)
@@ -66,5 +79,5 @@ def scrape_LA_times():
 
         excel = Files()
         excel.create_workbook(f"output/search_results_{order}.xlsx")
-        excel.append_rows_to_worksheet(content=[row.__dict__ for row in output_rows])
+        excel.append_rows_to_worksheet(content=[row.to_dict() for row in output_rows])
         excel.save_workbook()
