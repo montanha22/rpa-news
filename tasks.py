@@ -40,6 +40,8 @@ class OutputRow:
 
 @task
 def scrape_LA_times():
+    output_files = []
+
     for order, item in enumerate(workitems.inputs):
         search_query = item.payload.get("search_query")
         category = item.payload.get("category")
@@ -77,7 +79,22 @@ def scrape_LA_times():
             )
             output_rows.append(output_row)
 
+        excel_output_filepath = f"output/search_results_{order}.xlsx"
+
         excel = Files()
-        excel.create_workbook(f"output/search_results_{order}.xlsx")
+        excel.create_workbook(excel_output_filepath)
         excel.append_rows_to_worksheet(content=[row.to_dict() for row in output_rows])
         excel.save_workbook()
+
+        # add the output file to a work item output
+        image_files = [row.picture_filename for row in output_rows if row.picture_filename]
+        workitems.outputs.create(
+            payload={
+                "excel_output_filepath": excel_output_filepath,
+                "search_query": search_query,
+                "category": category,
+                "months": n_months,
+                "image_files": image_files,
+            },
+            files=[excel_output_filepath] + image_files,
+        )
