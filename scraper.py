@@ -156,6 +156,9 @@ class LATimesScraper:
                 try:
                     article = self.parse_article(article_webelement)
 
+                    if article is None:
+                        continue
+
                     if article.publication_month < min_date:
                         should_break = True
                         break
@@ -186,7 +189,7 @@ class LATimesScraper:
 
         return news
 
-    def parse_article(self, article: WebElement) -> Article:
+    def parse_article(self, article: WebElement) -> Article | None:
         category = self.extract_article_cateogry(article)
         title = self.extract_article_title(article)
         description = self.extract_description(article)
@@ -196,6 +199,10 @@ class LATimesScraper:
 
         if image_url:
             image_filepath = self.download_image(image_url)
+
+        # if we don't have a title or description, we skip the article
+        if not title or not description:
+            return None
 
         return Article(
             title=title,
@@ -207,17 +214,33 @@ class LATimesScraper:
         )
 
     def extract_article_cateogry(self, article: WebElement) -> str:
-        return article.find_element(By.CSS_SELECTOR, ".promo-category").text
+        try:
+            return article.find_element(By.CSS_SELECTOR, ".promo-category").text
+        except NoSuchElementException:
+            self.logger.error("No category found for the article")
+            return None
 
     def extract_article_title(self, article: WebElement) -> str:
-        return article.find_element(By.CSS_SELECTOR, ".promo-title").text
+        try:
+            return article.find_element(By.CSS_SELECTOR, ".promo-title").text
+        except NoSuchElementException:
+            self.logger.error("No title found for the article")
+            return None
 
     def extract_description(self, article: WebElement) -> str:
-        return article.find_element(By.CSS_SELECTOR, ".promo-description").text
+        try:
+            return article.find_element(By.CSS_SELECTOR, ".promo-description").text
+        except NoSuchElementException:
+            self.logger.error("No description found for the article")
+            return None
 
     def extract_article_date(self, article: WebElement) -> datetime:
-        timestamp_ns = article.find_element(By.CSS_SELECTOR, ".promo-timestamp").get_dom_attribute("data-timestamp")
-        return datetime.fromtimestamp(int(timestamp_ns) / 1000, ZoneInfo("UTC"))
+        try:
+            timestamp_ns = article.find_element(By.CSS_SELECTOR, ".promo-timestamp").get_dom_attribute("data-timestamp")
+            return datetime.fromtimestamp(int(timestamp_ns) / 1000, ZoneInfo("UTC"))
+        except NoSuchElementException:
+            self.logger.error("No date found for the article")
+            return datetime.min
 
     def extract_image_url(self, article: WebElement) -> str | None:
         try:
