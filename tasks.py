@@ -40,8 +40,6 @@ class OutputRow:
 
 @task
 def scrape_LA_times():
-    output_files = []
-
     for order, item in enumerate(workitems.inputs):
         search_query = item.payload.get("search_query")
         category = item.payload.get("category")
