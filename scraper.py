@@ -241,7 +241,7 @@ class LATimesScraper:
             str: The path to the downloaded image.
         """
         extension = image_url.split(".")[-1]
-        folderpath = folderpath or "output/imgs"
+        folderpath = folderpath or "output"
 
         response = requests.get(image_url, stream=True)
         response.raise_for_status()
@@ -251,7 +251,7 @@ class LATimesScraper:
         folder = Path(folderpath)
         folder.mkdir(parents=True, exist_ok=True)
 
-        file = folder / f"{random_filename}.{extension}"
+        file = folder / f"image_{random_filename}.{extension}"
         with file.open("wb") as f:
             for chunk in response.iter_content(chunk_size=8192):
                 f.write(chunk)
