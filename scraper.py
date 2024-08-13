@@ -59,6 +59,7 @@ class LATimesScraper:
         options.add_argument("--start-maximized")
         options.add_argument("--window-size=1920,1080")
         options.add_argument("--remote-debugging-port=9222")
+        options.add_argument("--disable-dev-shm-usage")
         options.add_experimental_option("excludeSwitches", ["enable-logging"])
 
         return options
