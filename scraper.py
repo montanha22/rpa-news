@@ -1,8 +1,12 @@
 import logging
-import re
+import random
+import string
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
+from typing import Optional
 
+import requests
 from RPA.core.webdriver import start
 from selenium import webdriver
 from selenium.common.exceptions import NoSuchElementException
@@ -17,11 +21,12 @@ from zoneinfo import ZoneInfo
 
 @dataclass
 class Article:
-    category: str
     title: str
     description: str
     published_at: datetime
-    image_url: str
+    category: Optional[str] = None
+    image_url: Optional[str] = None
+    image_filepath: Optional[str] = None
 
     @property
     def publication_date(self):
@@ -115,7 +120,7 @@ class LATimesScraper:
             EC.visibility_of_element_located((By.CSS_SELECTOR, ".search-results-module-filters-selected-reset"))
         )
 
-    def get_news(self, search_query: str, min_date: int):
+    def get_news(self, min_date: int) -> list[Article]:
         # get results div (.search-results-module-results-menu)
         # wait for the search results to be visible
         search_results = WebDriverWait(self.driver, timeout=5).until(
@@ -186,9 +191,20 @@ class LATimesScraper:
         title = self.extract_article_title(article)
         description = self.extract_description(article)
         date = self.extract_article_date(article)
-        picture_url = self.extract_picture_url(article)
+        image_url = self.extract_image_url(article)
+        image_filepath = None
 
-        return Article(category, title, description, date, picture_url)
+        if image_url:
+            image_filepath = self.download_image(image_url)
+
+        return Article(
+            title=title,
+            description=description,
+            published_at=date,
+            category=category,
+            image_url=image_url,
+            image_filepath=image_filepath,
+        )
 
     def extract_article_cateogry(self, article: WebElement) -> str:
         return article.find_element(By.CSS_SELECTOR, ".promo-category").text
@@ -203,55 +219,45 @@ class LATimesScraper:
         timestamp_ns = article.find_element(By.CSS_SELECTOR, ".promo-timestamp").get_dom_attribute("data-timestamp")
         return datetime.fromtimestamp(int(timestamp_ns) / 1000, ZoneInfo("UTC"))
 
-    def extract_picture_url(self, article: WebElement) -> str | None:
+    def extract_image_url(self, article: WebElement) -> str | None:
         try:
             return article.find_element(By.CSS_SELECTOR, "img").get_dom_attribute("src")
         except NoSuchElementException:
+            self.logger.warning("No image found for the article")
             return None
+
+    def generate_random_filename(self, length: int = 8) -> str:
+        return "".join(random.choices(string.ascii_letters + string.digits, k=length))
+
+    def download_image(self, image_url: str, folderpath: str = None) -> str:
+        """Download a image from a URL and save it to a file with a random name.
+
+        Args:
+            image_url (str): The URL of the image to download.
+            folderpath (str, optional): The folder where the image will be saved. Defaults to None.
+            if folderpath is None, the image will be saved in the output/imgs folder.
+
+        Returns:
+            str: The path to the downloaded image.
+        """
+        extension = image_url.split(".")[-1]
+        folderpath = folderpath or "output/imgs"
+
+        response = requests.get(image_url, stream=True)
+        response.raise_for_status()
+
+        random_filename = self.generate_random_filename()
+
+        folder = Path(folderpath)
+        folder.mkdir(parents=True, exist_ok=True)
+
+        file = folder / f"{random_filename}.{extension}"
+        with file.open("wb") as f:
+            for chunk in response.iter_content(chunk_size=8192):
+                f.write(chunk)
+
+        return str(file)
 
     def driver_quit(self):
         if self._driver:
             self._driver.quit()
-
-
-def is_there_any_money_amount(text: str) -> bool:
-    """Check if there is any money amount in the text.
-
-    Possible formats: $11.1 | $111,111.11 | 11 dollars | 11 USD
-
-    Args:
-        text (str): The text to be checked.
-
-    Returns:
-        bool: True if there is any money amount in the text, False otherwise.
-
-    Examples:
-        >>> is_there_any_money_amount("The price is $11.1")
-        True
-        >>> is_there_any_money_amount("The price is $11.1 dollars")
-        True
-        >>> is_there_any_money_amount("The price is 11 dollars")
-        True
-        >>> is_there_any_money_amount("The price is 11 USD")
-        True
-        >>> is_there_any_money_amount("The price is 11")
-        False
-    """
-    # boolean to check if there is any money amount in the article
-    # possible formats: $11.1 | $111,111.11 | 11 dollars | 11 USD
-
-    # regex for numbers with 1 or 2 decimal places and thousands separator
-    # 1, 11, 111, 1.1, 11.1, 111.1, 1,111.1, 11,111.11
-    NUMBERS = r"\d{1,3}(,\d{3})*(\.\d{1,2})?"
-
-    # regex for money amounts
-    dollar_first = re.compile(rf"\${NUMBERS}")
-    dollar_last = re.compile(rf"{NUMBERS}\s?dollars", re.IGNORECASE)
-    usd = re.compile(rf"{NUMBERS}\s?USD", re.IGNORECASE)
-
-    money_amount = False
-    money_amount |= bool(dollar_first.search(text))
-    money_amount |= bool(dollar_last.search(text))
-    money_amount |= bool(usd.search(text))
-
-    return money_amount
