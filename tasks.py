@@ -12,7 +12,7 @@ def minimal_task():
     print("oi")
     search_query = "Golf"
     category = "greenspace"
-    n_months = 1100
+    n_months = 1
 
     n_months = max(n_months, 1)
 
