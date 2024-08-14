@@ -1,8 +1,8 @@
 [
   {
     "payload": {
-      "search_query": "golf",
-      "category": "sports",
+      "search_query": "meal",
+      "category": "food",
       "months": 1
     },
     "files": {}

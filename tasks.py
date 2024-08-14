@@ -7,7 +7,7 @@ from robocorp.tasks import task
 from RPA.Excel.Files import Files
 from zoneinfo import ZoneInfo
 
-from scraper import LATimesScraper
+from scraper import Article, LATimesScraper
 from utilities import count_search_query_occurrences, is_there_any_money_amount
 
 
@@ -38,6 +38,12 @@ class OutputRow:
         }
 
 
+def compute_minimum_publication_date(n_months: int) -> date:
+    """Compute the minimum date for the search based on the number of months."""
+    current_month = datetime.now(ZoneInfo("UTC")).date().replace(day=1)
+    return current_month - relativedelta(months=(n_months - 1))
+
+
 @task
 def scrape_LA_times():
     for order, item in enumerate(workitems.inputs):
@@ -45,46 +51,25 @@ def scrape_LA_times():
         category = item.payload.get("category")
         n_months = int(item.payload.get("months"))
 
+        # Ensure that the number of months is at least 1 (current month)
         n_months = max(n_months, 1)
 
-        scraper = LATimesScraper()
-        scraper.set_webdriver()
-        scraper.open_homepage()
-        scraper.search_for(search_query)
-        scraper.filter_by_category(category)
+        # Get the latest news based on the search query, category, and number of months.
+        news = get_latest_news(search_query, category, n_months)
 
-        current_month = datetime.now(ZoneInfo("UTC")).date().replace(day=1)
-        min_date = current_month - relativedelta(months=(n_months - 1))
-        news = scraper.get_news(min_date)
-        scraper.driver_quit()
+        # Create output rows to be saved in an Excel file.
+        output_rows = create_output_rows(news, search_query, category, n_months)
 
-        output_rows: list[OutputRow] = []
-
-        for new in news:
-            query_count = count_search_query_occurrences(new, search_query)
-            contains_money = is_there_any_money_amount(new.title) or is_there_any_money_amount(new.description)
-
-            output_row = OutputRow(
-                title=new.title,
-                date=new.publication_date,
-                description=new.description,
-                picture_filename=new.image_filepath,
-                search_phrase_count=query_count,
-                contains_money=contains_money,
-                search_query=search_query,
-                category=category,
-                months=n_months,
-            )
-            output_rows.append(output_row)
-
+        # Save the output rows in an Excel file.
         excel_output_filepath = f"output/search_results_{order}.xlsx"
 
         excel = Files()
         excel.create_workbook(excel_output_filepath)
-        excel.append_rows_to_worksheet(content=[row.to_dict() for row in output_rows])
+        excel.create_worksheet("Search results")
+        excel.append_rows_to_worksheet(content=[row.to_dict() for row in output_rows], header=True)
         excel.save_workbook()
 
-        # add the output file to a work item output
+        # Create workitem outputs
         image_files = [row.picture_filename for row in output_rows if row.picture_filename]
         workitems.outputs.create(
             payload={
@@ -96,3 +81,55 @@ def scrape_LA_times():
             },
             files=[excel_output_filepath] + image_files,
         )
+
+
+def create_output_rows(news: list[Article], search_query: str, category: str, n_months: int) -> list[OutputRow]:
+    """Create output rows based on the news, search query, category, and number of months."""
+
+    output_rows: list[OutputRow] = []
+
+    for new in news:
+        query_count = count_search_query_occurrences(new, search_query)
+        contains_money = is_there_any_money_amount(new.title) or is_there_any_money_amount(new.description)
+
+        output_row = OutputRow(
+            title=new.title,
+            date=new.publication_date,
+            description=new.description,
+            picture_filename=new.image_filepath,
+            search_phrase_count=query_count,
+            contains_money=contains_money,
+            search_query=search_query,
+            category=category,
+            months=n_months,
+        )
+        output_rows.append(output_row)
+
+    return output_rows
+
+
+def get_latest_news(search_query: str, category: str, n_months: int) -> list[Article]:
+    """Get the latest news based on the search query, category, and number of months.
+
+    Args:
+        search_query (str): The search query to use.
+        category (str): The category to filter the news.
+        n_months (int): The number of months to consider.
+
+    Returns:
+        list[Article]: The list of articles found.
+    """
+    scraper = LATimesScraper()
+
+    scraper.set_webdriver()
+
+    scraper.open_homepage()
+    scraper.search_for(search_query)
+    scraper.filter_by_category(category)
+
+    min_date = compute_minimum_publication_date(n_months)
+    news = scraper.get_news(min_date)
+
+    scraper.driver_quit()
+
+    return news
