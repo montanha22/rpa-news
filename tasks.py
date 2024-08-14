@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from datetime import datetime, date
+from datetime import date, datetime
 
 from dateutil.relativedelta import relativedelta
 from robocorp import workitems
@@ -7,12 +7,19 @@ from robocorp.tasks import task
 from RPA.Excel.Files import Files
 from zoneinfo import ZoneInfo
 
-from scraper import Article, LATimesScraper
+from models import Article
+from scraper import LATimesScraper
 from utilities import count_search_query_occurrences, is_there_any_money_amount
+
+
+def is_not_empty_string(value: str) -> bool:
+    return isinstance(value, str) and value.strip()
 
 
 @dataclass
 class OutputRow:
+    """Output row to be saved in an Excel file."""
+
     title: str
     date: date
     description: str
@@ -23,6 +30,17 @@ class OutputRow:
     search_query: str
     category: str
     months: int
+
+    def __post_init__(self):
+        assert is_not_empty_string(self.title)
+        assert isinstance(self.date, date)
+        assert is_not_empty_string(self.description)
+        assert is_not_empty_string(self.picture_filename)
+        assert isinstance(self.search_phrase_count, int) and self.search_phrase_count >= 0
+        assert isinstance(self.contains_money, bool)
+        assert is_not_empty_string(self.search_query)
+        assert is_not_empty_string(self.category)
+        assert isinstance(self.months, int) and self.months >= 1
 
     def to_dict(self):
         return {
@@ -38,15 +56,34 @@ class OutputRow:
         }
 
 
-def compute_minimum_publication_date(n_months: int) -> date:
-    """Compute the minimum date for the search based on the number of months."""
-    current_month = datetime.now(ZoneInfo("UTC")).date().replace(day=1)
-    return current_month - relativedelta(months=(n_months - 1))
+def is_input_payload_valid(payload: dict) -> bool:
+    """Validate the input payload."""
+    search_query: str = str(payload.get("search_query", ""))
+    category: str = str(payload.get("category", ""))
+    months: str = str(payload.get("months", ""))
+
+    return (
+        # validate that search_query is a non-empty string
+        is_not_empty_string(search_query)
+        # validate that category is a non-empty string
+        and is_not_empty_string(category)
+        # validate that months is a positive integer
+        and months.isdigit()
+        and int(months) >= 0
+    )
 
 
 @task
 def scrape_LA_times():
+    """Scrape the LA Times website for the latest news based on the input payload from the workitems."""
+
     for order, item in enumerate(workitems.inputs):
+        # Validate the input payload
+        if not is_input_payload_valid(item.payload):
+            workitems.outputs.create(payload={"status": "error", "error": "Invalid input payload."})
+            item.fail("BUSINESS", message="Invalid input payload.")
+            continue
+
         search_query = item.payload.get("search_query")
         category = item.payload.get("category")
         n_months = int(item.payload.get("months"))
@@ -55,7 +92,7 @@ def scrape_LA_times():
         n_months = max(n_months, 1)
 
         # Get the latest news based on the search query, category, and number of months.
-        news = get_latest_news(search_query, category, n_months)
+        news = get_la_times_latest_news(search_query, category, n_months)
 
         # Create output rows to be saved in an Excel file.
         output_rows = create_output_rows(news, search_query, category, n_months)
@@ -65,7 +102,6 @@ def scrape_LA_times():
 
         excel = Files()
         excel.create_workbook(excel_output_filepath)
-        excel.create_worksheet("Search results")
         excel.append_rows_to_worksheet(content=[row.to_dict() for row in output_rows], header=True)
         excel.save_workbook()
 
@@ -73,6 +109,7 @@ def scrape_LA_times():
         image_files = [row.picture_filename for row in output_rows if row.picture_filename]
         workitems.outputs.create(
             payload={
+                "status": "success",
                 "excel_output_filepath": excel_output_filepath,
                 "search_query": search_query,
                 "category": category,
@@ -81,6 +118,12 @@ def scrape_LA_times():
             },
             files=[excel_output_filepath] + image_files,
         )
+
+
+def compute_minimum_publication_date(n_months: int) -> date:
+    """Compute the minimum date for the search based on the number of months."""
+    current_month = datetime.now(ZoneInfo("UTC")).date().replace(day=1)
+    return current_month - relativedelta(months=(n_months - 1))
 
 
 def create_output_rows(news: list[Article], search_query: str, category: str, n_months: int) -> list[OutputRow]:
@@ -108,7 +151,7 @@ def create_output_rows(news: list[Article], search_query: str, category: str, n_
     return output_rows
 
 
-def get_latest_news(search_query: str, category: str, n_months: int) -> list[Article]:
+def get_la_times_latest_news(search_query: str, category: str, n_months: int) -> list[Article]:
     """Get the latest news based on the search query, category, and number of months.
 
     Args:

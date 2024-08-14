@@ -1,15 +1,17 @@
 import logging
 import random
 import string
-from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
 import requests
 from RPA.core.webdriver import start
 from selenium import webdriver
-from selenium.common.exceptions import NoSuchElementException
+from selenium.common.exceptions import (
+    ElementClickInterceptedException,
+    NoSuchElementException,
+    StaleElementReferenceException,
+)
 from selenium.webdriver.common.by import By
 from selenium.webdriver.remote.webdriver import WebDriver
 from selenium.webdriver.remote.webelement import WebElement
@@ -18,23 +20,8 @@ from selenium.webdriver.support.select import Select
 from selenium.webdriver.support.ui import WebDriverWait
 from zoneinfo import ZoneInfo
 
-
-@dataclass
-class Article:
-    title: str
-    description: str
-    published_at: datetime
-    category: Optional[str] = None
-    image_url: Optional[str] = None
-    image_filepath: Optional[str] = None
-
-    @property
-    def publication_date(self):
-        return self.published_at.date()
-
-    @property
-    def publication_month(self):
-        return self.published_at.replace(day=1).date()
+from models import Article
+from utilities import is_there_any_stale_web_element
 
 
 # create error class to articles we failed to parse
@@ -164,13 +151,6 @@ class LATimesScraper:
             EC.visibility_of_element_located((By.CSS_SELECTOR, ".search-results-module-results-menu"))
         )
 
-        # Wait for the articles to be visible
-        before_sorting_articles = WebDriverWait(self.driver, timeout=5).until(
-            EC.visibility_of_all_elements_located(
-                (By.CSS_SELECTOR, ".search-results-module-results-menu > li"),
-            )
-        )
-
         # Wait for the sort by dropdown to be visible and select "Newest"
         sort_by_newest_select = WebDriverWait(self.driver, timeout=5).until(
             EC.visibility_of_element_located((By.CSS_SELECTOR, ".search-results-module-sorts select"))
@@ -180,23 +160,15 @@ class LATimesScraper:
         # Wait for the search results to be stale, meaning that the page loaded the articles sorted by newest.
         WebDriverWait(self.driver, timeout=5).until(EC.staleness_of(search_results))
 
-        # Make sure the articles are stale, meaning that the page loaded the articles sorted by newest.
-        for article in before_sorting_articles:
-            WebDriverWait(self.driver, timeout=5).until(EC.staleness_of(article))
-
-        news = []
+        news = set()
 
         # Loop through the pages of the search results
         # until we reach the minimum date or there are no more pages.
         while True:
-            should_break = False
+            should_stop_pagination = False
+            should_refetch_articles = False
 
-            # Wait for the articles to be visible
-            articles = WebDriverWait(self.driver, timeout=5).until(
-                EC.visibility_of_all_elements_located(
-                    (By.CSS_SELECTOR, ".search-results-module-results-menu > li"),
-                )
-            )
+            articles = self.fetch_articles_on_page_and_make_sure_they_are_not_stale()
 
             for article_webelement in articles:
                 try:
@@ -206,11 +178,11 @@ class LATimesScraper:
                     # if the article is older than the minimum date, we stop the loop
                     # and flag the should_break variable to True, so we can break the outer loop.
                     if article.publication_month < min_date:
-                        should_break = True
+                        should_stop_pagination = True
                         break
 
                     # append the article to the news list if it's not older than the minimum date.
-                    news.append(article)
+                    news.add(article)
 
                 # if an error occurs while parsing the article, we log the error and continue to the next article.
                 except ArticleParseError:
@@ -221,30 +193,64 @@ class LATimesScraper:
                         "An error occurred while parsing an article", exc_info=True, extra={"screenshot": filepath}
                     )
 
-            # break the loop if we should break (the articles are older than the minimum date)
-            if should_break:
+                except StaleElementReferenceException:
+                    should_refetch_articles = True
+
+            # if the should_refetch_articles variable is True, we restart the loop.
+            if should_refetch_articles:
+                continue
+
+            # if the should_stop_pagination variable is True, we break the loop.
+            if should_stop_pagination:
                 break
 
-            # find the next page button and click on it
-            next_page_buttons = self.driver.find_elements(By.CSS_SELECTOR, ".search-results-module-next-page")
+            next_page_found = self.go_to_next_page()
 
-            # if there are no next page buttons, we break the loop, as there are no more pages.
-            if not next_page_buttons:
+            # if there is no next page, we break the loop.
+            if not next_page_found:
                 break
 
-            # if there are more than one next page button, we raise an error.
-            assert len(next_page_buttons) == 1, "More than one next page button found"
+        return sorted(news, key=lambda x: x.published_at, reverse=True)
 
-            next_page_button = next_page_buttons[0]
+    # add function to go to next page if it is possible and if it is not let the caller know
+    def go_to_next_page(self) -> bool:
+        """Go to the next page of the search results.
 
-            # if the next page button is inactive, we break the loop, as there are no more pages.
-            if next_page_button.find_element(By.TAG_NAME, "svg").get_dom_attribute("data-inactive"):
-                break
+        Returns:
+            bool: True if the next page was found and clicked, False otherwise.
+        """
+        next_page_buttons = self.driver.find_elements(By.CSS_SELECTOR, ".search-results-module-next-page")
 
-            # otherwise, we click on the next page button and continue to the next page.
+        if not next_page_buttons:
+            return False
+
+        assert len(next_page_buttons) == 1, "More than one next page button found"
+
+        next_page_button = next_page_buttons[0]
+
+        if next_page_button.find_element(By.TAG_NAME, "svg").get_dom_attribute("data-inactive"):
+            return False
+
+        try:
             next_page_button.click()
+            return True
+        except ElementClickInterceptedException:
+            return False
 
-        return news
+    def fetch_articles_on_page_and_make_sure_they_are_not_stale(self) -> list[WebElement]:
+        """Fetch the articles on the page and make sure they are not stale.
+
+        Returns:
+            list[WebElement]: The list of articles on the page.
+        """
+        articles = WebDriverWait(self.driver, timeout=5).until(
+            EC.visibility_of_all_elements_located((By.CSS_SELECTOR, ".search-results-module-results-menu > li"))
+        )
+
+        if is_there_any_stale_web_element(articles):
+            return self.fetch_articles_on_page_and_make_sure_they_are_not_stale()
+
+        return articles
 
     def parse_article(self, article: WebElement) -> Article:
         """Parse an article from the search results page.
@@ -335,7 +341,11 @@ class LATimesScraper:
         Returns:
             str: The path to the downloaded image.
         """
-        extension = image_url.split(".")[-1]
+        extension = image_url.split(".")[-1].lower()
+
+        if extension not in ["jpg", "jpeg", "png", "gif"]:
+            extension = "jpg"
+
         folderpath = folderpath or "output"
 
         response = requests.get(image_url, stream=True)

@@ -1,6 +1,8 @@
 import re
 
-from scraper import Article
+from models import Article
+from selenium.webdriver.remote.webelement import WebElement
+from selenium.common.exceptions import StaleElementReferenceException
 
 
 def is_there_any_money_amount(text: str) -> bool:
@@ -54,3 +56,21 @@ def count_search_query(text: str, search_query: str) -> int:
 
 def count_search_query_occurrences(article: Article, search_query: str) -> int:
     return count_search_query(article.title, search_query) + count_search_query(article.description, search_query)
+
+
+def is_there_any_stale_web_element(web_elements: list[WebElement]) -> bool:
+    for web_element in web_elements:
+        if is_web_element_stale(web_element):
+            return True
+
+    return False
+
+
+def is_web_element_stale(web_element: WebElement) -> bool:
+    try:
+        if not web_element.is_enabled():
+            return True
+    except StaleElementReferenceException:
+        return True
+
+    return False
