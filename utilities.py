@@ -1,6 +1,5 @@
 import re
 
-from models import Article
 from selenium.webdriver.remote.webelement import WebElement
 from selenium.common.exceptions import StaleElementReferenceException
 
@@ -49,16 +48,14 @@ def is_there_any_money_amount(text: str) -> bool:
 
 
 def count_search_query(text: str, search_query: str) -> int:
+    """Count the number of occurrences of the search query in the text."""
     if not search_query:
         return 0
     return text.lower().count(search_query.lower())
 
 
-def count_search_query_occurrences(article: Article, search_query: str) -> int:
-    return count_search_query(article.title, search_query) + count_search_query(article.description, search_query)
-
-
 def is_there_any_stale_web_element(web_elements: list[WebElement]) -> bool:
+    """Check if there is any stale web element in the list of web elements."""
     for web_element in web_elements:
         if is_web_element_stale(web_element):
             return True
@@ -67,6 +64,7 @@ def is_there_any_stale_web_element(web_elements: list[WebElement]) -> bool:
 
 
 def is_web_element_stale(web_element: WebElement) -> bool:
+    """Check if the web element is stale."""
     try:
         if not web_element.is_enabled():
             return True
@@ -74,3 +72,15 @@ def is_web_element_stale(web_element: WebElement) -> bool:
         return True
 
     return False
+
+
+def string_has_value(value: str) -> bool:
+    return isinstance(value, str) and value.strip()
+
+
+def is_not_string(value) -> bool:
+    return not isinstance(value, str)
+
+
+def is_empty_string(value: str) -> bool:
+    return not value.strip()

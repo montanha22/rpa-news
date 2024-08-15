@@ -24,7 +24,6 @@ from models import Article
 from utilities import is_there_any_stale_web_element
 
 
-# create error class to articles we failed to parse
 class ArticleParseError(Exception):
     pass
 

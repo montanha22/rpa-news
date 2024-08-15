@@ -1,5 +1,5 @@
-from dataclasses import dataclass
 from datetime import date, datetime
+from typing import Any
 
 from dateutil.relativedelta import relativedelta
 from robocorp import workitems
@@ -7,86 +7,69 @@ from robocorp.tasks import task
 from RPA.Excel.Files import Files
 from zoneinfo import ZoneInfo
 
-from models import Article
+from models import Article, OutputRow
 from scraper import LATimesScraper
-from utilities import count_search_query_occurrences, is_there_any_money_amount
+from utilities import is_empty_string, is_not_string
 
 
-def is_not_empty_string(value: str) -> bool:
-    return isinstance(value, str) and value.strip()
+def validate_input_payload(payload: dict) -> tuple[bool, str]:
+    """Validate the input payload.
 
+    Args:
+        payload (dict): The input payload.
 
-@dataclass
-class OutputRow:
-    """Output row to be saved in an Excel file."""
+    Returns:
+        tuple[bool, str]: A tuple with a boolean indicating if the payload is valid and an error message.
+    """
 
-    title: str
-    date: date
-    description: str
-    picture_filename: str
-    search_phrase_count: int
-    contains_money: bool
+    search_query: str = payload.get("search_query")
+    category: str = payload.get("category")
+    months: Any = payload.get("months")
 
-    search_query: str
-    category: str
-    months: int
+    if search_query is None or is_not_string(search_query) or is_empty_string(search_query):
+        return (False, "The search query is required and should be a non-empty string.")
 
-    def __post_init__(self):
-        assert is_not_empty_string(self.title)
-        assert isinstance(self.date, date)
-        assert is_not_empty_string(self.description)
-        assert is_not_empty_string(self.picture_filename)
-        assert isinstance(self.search_phrase_count, int) and self.search_phrase_count >= 0
-        assert isinstance(self.contains_money, bool)
-        assert is_not_empty_string(self.search_query)
-        assert is_not_empty_string(self.category)
-        assert isinstance(self.months, int) and self.months >= 1
+    if category is not None and (
+        is_not_string(category)  # wrong type
+        or is_empty_string(category)  # empty string
+    ):
+        return (False, "If provided, the category should be a non-empty string.")
 
-    def to_dict(self):
-        return {
-            "Title": self.title,
-            "Date": self.date.isoformat(),
-            "Description": self.description,
-            "Picture filename": self.picture_filename,
-            "Search phrase count": self.search_phrase_count,
-            "Contains money": self.contains_money,
-            "Search query": self.search_query,
-            "Category": self.category,
-            "Months": self.months,
-        }
+    if months is not None:
+        if not isinstance(months, int):
+            return (False, "If provided, the number of months should be a positive integer.")
 
+        if months < 0:
+            return (False, "If provided, the number of months should be a positive integer.")
 
-def is_input_payload_valid(payload: dict) -> bool:
-    """Validate the input payload."""
-    search_query: str = str(payload.get("search_query", ""))
-    category: str = str(payload.get("category", ""))
-    months: str = str(payload.get("months", ""))
-
-    return (
-        # validate that search_query is a non-empty string
-        is_not_empty_string(search_query)
-        # validate that category is a non-empty string
-        and is_not_empty_string(category)
-        # validate that months is a positive integer
-        and months.isdigit()
-        and int(months) >= 0
-    )
+    return (True, "")
 
 
 @task
 def scrape_LA_times():
-    """Scrape the LA Times website for the latest news based on the input payload from the workitems."""
+    """Scrape the LA Times website for the latest news based on the input payload from the workitems.
+
+    The input payload should contain the following
+
+    - search_query: The search query to use. It should be a non-empty string.
+
+    - category:     The category to filter the news. If not provided, all categories are considered.
+
+    - months:       The number of months to consider. It should be a positive integer.
+                    If not provided, the current month is considered.
+    """
 
     for order, item in enumerate(workitems.inputs):
         # Validate the input payload
-        if not is_input_payload_valid(item.payload):
-            workitems.outputs.create(payload={"status": "error", "error": "Invalid input payload."})
-            item.fail("BUSINESS", message="Invalid input payload.")
+        valid, error_message = validate_input_payload(item.payload)
+        if not valid:
+            workitems.outputs.create(payload={"status": "error", "error": error_message})
+            item.fail("BUSINESS", message=error_message)
             continue
 
         search_query = item.payload.get("search_query")
         category = item.payload.get("category")
-        n_months = int(item.payload.get("months"))
+        n_months = int(item.payload.get("months") or 1)
 
         # Ensure that the number of months is at least 1 (current month)
         n_months = max(n_months, 1)
@@ -126,20 +109,20 @@ def compute_minimum_publication_date(n_months: int) -> date:
     return current_month - relativedelta(months=(n_months - 1))
 
 
-def create_output_rows(news: list[Article], search_query: str, category: str, n_months: int) -> list[OutputRow]:
+def create_output_rows(articles: list[Article], search_query: str, category: str, n_months: int) -> list[OutputRow]:
     """Create output rows based on the news, search query, category, and number of months."""
 
     output_rows: list[OutputRow] = []
 
-    for new in news:
-        query_count = count_search_query_occurrences(new, search_query)
-        contains_money = is_there_any_money_amount(new.title) or is_there_any_money_amount(new.description)
+    for article in articles:
+        query_count = article.count_search_query_occurrences(search_query)
+        contains_money = article.is_there_any_money_amount()
 
         output_row = OutputRow(
-            title=new.title,
-            date=new.publication_date,
-            description=new.description,
-            picture_filename=new.image_filepath,
+            title=article.title,
+            date=article.publication_date,
+            description=article.description,
+            picture_filename=article.image_filepath,
             search_phrase_count=query_count,
             contains_money=contains_money,
             search_query=search_query,
